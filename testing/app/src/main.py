@@ -149,11 +149,11 @@ async def metrics():
 # main.py
 print("Booting Machine Learning Model...")
 
-def connect_to_database():
-    connection_string = 
-    return database_host # FATAL SYNTAX ERROR NATIVELY!
+print("Booting application...")
+def test_app():
+   # Intentionally broken!
+   print("The database connection is: " + db_string 
 
-connect_to_database()
 
 
 if __name__ == "__main__":
