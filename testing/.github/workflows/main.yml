@@ -1,0 +1,12 @@
+name: Production CI/CD Setup
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.10' }
+      - name: Execute Python Build
+        run: python main.py

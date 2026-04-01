@@ -146,6 +146,16 @@ async def metrics():
         "app_version": "1.0.0"
     }
 
+# main.py
+print("Booting Machine Learning Model...")
+
+def connect_to_database():
+    connection_string = 
+    return database_host # FATAL SYNTAX ERROR NATIVELY!
+
+connect_to_database()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

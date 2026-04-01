@@ -1,0 +1,63 @@
+name: Deploy Artifacts to AWS S3
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+
+env:
+  AWS_REGION: us-east-1
+  S3_BUCKET: 'your-app-deployment-bucket-${{ github.event.inputs.environment || ''dev'' }}'
+
+jobs:
+  build-and-deploy-to-s3:
+    name: Build & Deploy to S3
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Package Application
+        run: |
+          # Create a deployment package (zip file)
+          zip -r deployment-package.zip app/ requirements.txt pyproject.toml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload Artifact to S3
+        run: |
+          # The S3 bucket name can be adjusted, and you should ensure it exists.
+          aws s3 cp deployment-package.zip s3://${{ env.S3_BUCKET }}/releases/app-${{ github.sha }}.zip
+          
+          # Optional: Tag the object with commit hash
+          echo "Uploaded app-${{ github.sha }}.zip to S3 bucket ${{ env.S3_BUCKET }}"
+
+      - name: Sync Static Assets to S3 (if applicable)
+        run: |
+          # If there are public/static assets to be directly served from S3, sync them
+          if [ -d "app/public" ]; then
+            aws s3 sync app/public s3://${{ env.S3_BUCKET }}/public/ --delete
+          fi
