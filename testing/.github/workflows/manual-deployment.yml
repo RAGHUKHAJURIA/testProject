@@ -1,0 +1,87 @@
+name: Manual Deployment to AWS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      docker_image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        default: 'latest'
+      skip_tests:
+        description: 'Skip tests and deploy directly'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  manual-deploy:
+    name: Deploy to ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Get ECR repository URI
+        id: ecr
+        run: |
+          ECR_REGISTRY=$(aws ecr describe-repositories \
+            --repository-names devops-automation-app \
+            --query 'repositories[0].repositoryUri' \
+            --output text)
+          echo "registry=${ECR_REGISTRY}" >> $GITHUB_OUTPUT
+      
+      - name: Update ECS service
+        run: |
+          IMAGE_TAG="${{ github.event.inputs.docker_image_tag }}"
+          SERVICE_NAME="devops-automation-service-${{ github.event.inputs.environment }}"
+          CLUSTER_NAME="devops-automation-cluster-${{ github.event.inputs.environment }}"
+          
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Wait for deployment
+        run: |
+          SERVICE_NAME="devops-automation-service-${{ github.event.inputs.environment }}"
+          CLUSTER_NAME="devops-automation-cluster-${{ github.event.inputs.environment }}"
+          
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME \
+            --region ${{ env.AWS_REGION }}
+      
+      - name: Verify deployment
+        run: |
+          SERVICE_NAME="devops-automation-service-${{ github.event.inputs.environment }}"
+          CLUSTER_NAME="devops-automation-cluster-${{ github.event.inputs.environment }}"
+          
+          aws ecs describe-services \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME \
+            --region ${{ env.AWS_REGION }} \
+            --query 'services[0].[deployments[0].status, desiredCount, runningCount]' \
+            --output table

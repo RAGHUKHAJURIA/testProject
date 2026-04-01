@@ -1,0 +1,21 @@
+version: '1'
+rules:
+  - id: bandit
+    name: Bandit Security Scan
+    files: app/src/**/*.py
+    command: bandit -r app/src/ -f json -o bandit-report.json
+    
+  - id: black
+    name: Code Formatting
+    files: app/src/**/*.py
+    command: black app/src/
+    
+  - id: pytest
+    name: Unit Tests
+    files: app/src/**/*.py
+    command: pytest tests/unit/ -v
+    
+  - id: pylint
+    name: Pylint Linting
+    files: app/src/**/*.py
+    command: pylint app/src/

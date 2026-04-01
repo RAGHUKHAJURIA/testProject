@@ -1,0 +1,130 @@
+name: Scheduled Tests & Monitoring
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+    - cron: '0 0 * * 0'  # Weekly on Sunday at midnight UTC
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  performance-tests:
+    name: Performance & Load Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest locust
+      
+      - name: Run performance tests
+        run: pytest tests/performance/ -v --tb=short
+      
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-test-results
+          path: performance-results/
+
+  system-health-check:
+    name: System Health Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Check ECS services
+        run: |
+          aws ecs list-services --cluster devops-automation-cluster \
+            --query 'serviceArns' --output table
+      
+      - name: Check RDS databases
+        run: |
+          aws rds describe-db-instances \
+            --query 'DBInstances[*].[DBInstanceIdentifier,DBInstanceStatus]' \
+            --output table
+      
+      - name: Check CloudWatch alarms
+        run: |
+          aws cloudwatch describe-alarms \
+            --state-value ALARM \
+            --query 'MetricAlarms[*].[AlarmName,StateValue]' \
+            --output table
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit safety pip-audit
+      
+      - name: Run Bandit
+        run: bandit -r app/src/ -f json -o bandit-report.json || true
+      
+      - name: Check dependencies
+        run: safety check --json > safety-report.json || true
+      
+      - name: Audit installed packages
+        run: pip-audit > audit-report.txt || true
+      
+      - name: Upload security reports
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-audit-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            audit-report.txt
+
+  dependency-update:
+    name: Check for Dependency Updates
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Check for outdated packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-tools
+          pip list --outdated > outdated-packages.txt || true
+      
+      - name: Upload report
+        uses: actions/upload-artifact@v3
+        with:
+          name: outdated-packages
+          path: outdated-packages.txt

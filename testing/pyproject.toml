@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devops-automation-app"
+version = "1.0.0"
+description = "DevOps automation application for CI/CD testing"
+authors = [
+    {name = "DevOps Team", email = "devops@example.com"}
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.104.1",
+    "uvicorn>=0.24.0",
+    "sqlalchemy>=2.0.23",
+    "psycopg2-binary>=2.9.9",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.3",
+    "pytest-cov>=4.1.0",
+    "black>=23.12.1",
+    "pylint>=3.0.3",
+    "flake8>=6.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--strict-markers"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "smoke: Smoke tests",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.pylint.messages_control]
+disable = [
+    "C0111",  # Missing docstring
+    "R0913",  # Too many arguments
+]
+
+[tool.isort]
+profile = "black"
+line_length = 100
