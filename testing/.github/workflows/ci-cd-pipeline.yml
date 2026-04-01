@@ -1,358 +1,161 @@
-name: CI/CD Pipeline for AWS Deployment
+name: CI/CD Pipeline
 
 on:
   push:
     branches:
       - main
-      - develop
   pull_request:
     branches:
       - main
-      - develop
-  workflow_dispatch:
 
-env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: devops-automation-app
-  ECS_SERVICE: devops-automation-service
-  ECS_CLUSTER: devops-automation-cluster
-  ECS_TASK_DEFINITION: devops-automation-task
+permissions:
+  contents: read
+  id-token: write # Required for OIDC authentication with AWS
 
 jobs:
-  # ==================== Code Quality & Testing ====================
-  code-quality:
-    name: Code Quality & Linting
+  lint:
+    name: Lint Code
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pylint flake8 black pytest pytest-cov
-      
-      - name: Run pylint
-        run: pylint app/src/**/*.py --fail-under=7.0 || true
-      
-      - name: Run flake8
-        run: flake8 app/src --max-line-length=100 --count --statistics
-      
-      - name: Check code formatting
-        run: black --check app/src/ || true
+        uses: actions/checkout@v4
 
-  # ==================== Unit Tests ====================
-  unit-tests:
-    name: Unit Tests
-    runs-on: ubuntu-latest
-    needs: code-quality
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-mock
-      
-      - name: Run unit tests
-        run: pytest tests/unit/ -v --cov=app/src --cov-report=xml --cov-report=html
-      
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
+          python-version: '3.x'
 
-  # ==================== Integration Tests ====================
-  integration-tests:
-    name: Integration Tests
+      - name: Install pre-commit hooks
+        run: |
+          pip install pre-commit
+          pre-commit install
+
+      - name: Run pre-commit checks
+        run: pre-commit run --all-files
+
+  test:
+    name: Run Unit and Integration Tests
     runs-on: ubuntu-latest
-    needs: unit-tests
-    
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: testuser
-          POSTGRES_PASSWORD: testpass
-          POSTGRES_DB: testdb
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-    
+    needs: lint
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      
+          python-version: '3.x'
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov pytest-mock
-      
-      - name: Run integration tests
-        env:
-          DATABASE_URL: postgresql://testuser:testpass@localhost:5432/testdb
-        run: pytest tests/integration/ -v
-      
-      - name: Upload test results
+        run: pip install -r testing/requirements.txt
+
+      - name: Run tests
+        working-directory: ./testing
+        run: ./scripts/run-tests.sh
+
+      - name: Upload test results (e.g., as artifact)
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: integration-test-results
-          path: test-results.xml
+          name: test-results
+          path: testing/test-results.xml # Assuming tests generate a JUnit XML report here
 
-  # ==================== Security Scan ====================
-  security-scan:
-    name: Security Scanning
+  security_scan_code:
+    name: Code Security Scan (SAST)
     runs-on: ubuntu-latest
-    needs: code-quality
-    
+    needs: lint
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install bandit safety
-      
-      - name: Run Bandit security scan
-        run: bandit -r app/src/ -f json -o bandit-report.json || true
-      
-      - name: Check dependencies for vulnerabilities
-        run: safety check --json || true
-      
-      - name: Upload security reports
-        uses: actions/upload-artifact@v3
-        with:
-          name: security-reports
-          path: bandit-report.json
+        uses: actions/checkout@v4
 
-  # ==================== Build Docker Image ====================
-  build:
-    name: Build Docker Image
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit SAST scan
+        working-directory: ./testing
+        run: bandit -r app/src -f sarif -o bandit-results.sarif || true # Allow failure to not block CI
+
+      - name: Upload Bandit SARIF results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: testing/bandit-results.sarif
+
+  build_and_push_docker:
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: [unit-tests, integration-tests, security-scan]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
-    
+    needs: [test, security_scan_code]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
-    
+      image_tag: ${{ steps.set-image-tag.outputs.image_tag }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Log in to Amazon ECR
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-oidc-role # Replace with your OIDC role ARN
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ env.AWS_REGION }}
-      
-      - name: Build, tag, and push image to Amazon ECR
-        id: build
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./docker/Dockerfile
-          push: true
-          tags: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }},${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      
-      - name: Create image definitions file
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: set-image-tag
         run: |
-          printf '[{"name":"devops-app","imageUri":"%s"}]' ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }} > imagedefinitions.json
-      
-      - name: Upload image definitions
-        uses: actions/upload-artifact@v3
-        with:
-          name: image-definitions
-          path: imagedefinitions.json
+          IMAGE_TAG="${{ github.sha }}"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
-  # ==================== Infrastructure Check ====================
-  terraform-plan:
-    name: Terraform Plan
-    runs-on: ubuntu-latest
-    needs: code-quality
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.0
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      
-      - name: Initialize Terraform
-        run: terraform init -upgrade
-        working-directory: terraform/
-      
-      - name: Validate Terraform
-        run: terraform validate
-        working-directory: terraform/
-      
-      - name: Format check
-        run: terraform fmt -check -recursive
-        working-directory: terraform/
-      
-      - name: Run Terraform plan
-        run: terraform plan -out=tfplan
-        working-directory: terraform/
-      
-      - name: Upload Terraform plan
-        uses: actions/upload-artifact@v3
-        with:
-          name: terraform-plan
-          path: terraform/tfplan
+      - name: Build Docker image
+        working-directory: ./testing
+        run: ./scripts/build-docker.sh ${{ secrets.ECR_REPOSITORY_URI }}:${{ steps.set-image-tag.outputs.image_tag }} ${{ secrets.ECR_REPOSITORY_URI }}:latest
 
-  # ==================== Deploy to AWS ====================
+      - name: Push Docker image to ECR
+        working-directory: ./testing
+        run: |
+          docker push ${{ secrets.ECR_REPOSITORY_URI }}:${{ steps.set-image-tag.outputs.image_tag }}
+          docker push ${{ secrets.ECR_REPOSITORY_URI }}:latest
+
+      - name: Docker Image Vulnerability Scan (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.ECR_REPOSITORY_URI }}:${{ steps.set-image-tag.outputs.image_tag }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
   deploy:
-    name: Deploy to AWS
+    name: Deploy to Kubernetes
     runs-on: ubuntu-latest
-    needs: [build, terraform-plan]
+    needs: build_and_push_docker
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
     environment:
-      name: production
-      url: https://your-app-domain.com
-    
+      name: production # Requires manual approval if configured in repo settings
+      url: 'https://your-app.example.com' # Replace with your application URL
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
-      
+        uses: actions/checkout@v4
+
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      
-      - name: Download image definitions
-        uses: actions/download-artifact@v3
-        with:
-          name: image-definitions
-      
-      - name: Deploy to Amazon ECS
-        run: |
-          aws ecs update-service \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --service ${{ env.ECS_SERVICE }} \
-            --force-new-deployment \
-            --region ${{ env.AWS_REGION }}
-      
-      - name: Wait for ECS service to stabilize
-        run: |
-          aws ecs wait services-stable \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --services ${{ env.ECS_SERVICE }} \
-            --region ${{ env.AWS_REGION }}
-      
-      - name: Get service details
-        run: |
-          aws ecs describe-services \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --services ${{ env.ECS_SERVICE }} \
-            --region ${{ env.AWS_REGION }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-oidc-role-eks # Role with EKS access
+          aws-region: ${{ secrets.AWS_REGION }}
 
-  # ==================== Post-Deploy Tests ====================
-  smoke-tests:
-    name: Smoke Tests (Post-Deploy)
-    runs-on: ubuntu-latest
-    needs: deploy
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests pytest
-      
-      - name: Run smoke tests
-        run: pytest tests/smoke/ -v
-        env:
-          APP_URL: https://your-app-domain.com
+      - name: Get Kubeconfig for EKS
+        run: aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
 
-  # ==================== Notifications ====================
-  notify:
-    name: Send Notifications
-    runs-on: ubuntu-latest
-    needs: [code-quality, unit-tests, integration-tests, security-scan, build, terraform-plan, deploy, smoke-tests]
-    if: always()
-    
-    steps:
-      - name: Determine status
-        id: status
-        run: |
-          if [ "${{ needs.code-quality.result }}" = "failure" ] || \
-             [ "${{ needs.unit-tests.result }}" = "failure" ] || \
-             [ "${{ needs.integration-tests.result }}" = "failure" ] || \
-             [ "${{ needs.security-scan.result }}" = "failure" ] || \
-             [ "${{ needs.build.result }}" = "failure" ] || \
-             [ "${{ needs.deploy.result }}" = "failure" ] || \
-             [ "${{ needs.smoke-tests.result }}" = "failure" ]; then
-            echo "status=failure" >> $GITHUB_OUTPUT
-          else
-            echo "status=success" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: Slack notification
-        if: always()
-        uses: 8398a7/action-slack@v3
-        with:
-          status: ${{ steps.status.outputs.status }}
-          text: 'CI/CD Pipeline ${{ steps.status.outputs.status }}'
-          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-          fields: repo,message,commit,author,action,eventName,ref
-        continue-on-error: true
+      - name: Deploy application
+        working-directory: ./testing
+        run: ./scripts/deploy.sh ${{ secrets.ECR_REPOSITORY_URI }}:${{ needs.build_and_push_docker.outputs.image_tag }}
